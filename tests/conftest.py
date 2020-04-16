@@ -21,6 +21,7 @@ import sys
 import tempfile
 import textwrap
 from contextlib import contextmanager
+from datetime import timedelta
 from functools import partial, wraps
 
 import _pytest.logging
@@ -155,6 +156,18 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Run proxy tests",
+    )
+    test_selection_group.addoption(
+        "--slow-tests",
+        "--tests-slower-than",
+        dest="test_slower_than",
+        type=int,
+        default=1,
+        help=(
+            "Run tests which are either not marked as slow or are marked as being "
+            "slower than the value provided, in seconds(or a fraction of). When 0, "
+            "all tests will run. Default: 1 second"
+        ),
     )
     output_options_group = parser.getgroup("Output Options")
     output_options_group.addoption(
@@ -434,6 +447,30 @@ def pytest_runtest_setup(item):
     ):
         item._skipped_by_mark = True
         pytest.skip(PRE_PYTEST_SKIP_REASON)
+
+    # Skip slow tests, if marked as such
+    tests_slower_than_value = item.config.getoption("--tests-slower-than")
+    if tests_slower_than_value > 0:
+        slow_test_marker = item.get_closest_marker("slow_test")
+        # It the test is not maked with slow_test, it's assumed that it's faster than the 1 second default
+        if slow_test_marker is not None:
+            if slow_test_marker.args:
+                raise RuntimeError(
+                    "The 'slow_test' marker does not support arguments, only keyword arguments, the "
+                    "same that 'datetime.datetime.timedelta' accepts."
+                )
+            slow_test_timedelta = timedelta(**slow_test_marker.kwargs)
+            tests_slower_than_timedelta = timedelta(seconds=tests_slower_than_value)
+            if slow_test_timedelta > tests_slower_than_timedelta:
+                item._skipped_by_mark = True
+                pytest.skip(
+                    "Test skipped because it's marked as slower({}) than the value provided "
+                    "by '--tests-slower-than={}', {}".format(
+                        slow_test_timedelta,
+                        tests_slower_than_value,
+                        tests_slower_than_timedelta,
+                    )
+                )
 
     requires_salt_modules_marker = item.get_closest_marker("requires_salt_modules")
     if requires_salt_modules_marker is not None:
